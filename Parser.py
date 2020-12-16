@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[332]:
+# In[2]:
 
 
 from tkinter import *
@@ -10,19 +10,25 @@ from tkinter.filedialog import askopenfilename
 import csv
 from pathlib import Path
 import pymongo
+import numpy as np
 # Use sentinel for missing values
 from numpy import nan as NA
 import pandas as pd
+# For showing plots in tkinter
+from matplotlib.figure import Figure 
+from matplotlib.backends.backend_tkagg import (FigureCanvasTkAgg,  
+NavigationToolbar2Tk) 
+import seaborn as sns
 
 # connect to mongodb
 client = pymongo.MongoClient("mongodb://localhost:27017")
 # create db
-db_formative = client["formative"]
+db_formative = client["summative"]
 # create collection
-collection_vendors = db_formative["test-80"]
+collection_vendors = db_formative["test-5"]
 
 
-# In[333]:
+# In[3]:
 
 
 # Global variables
@@ -30,7 +36,7 @@ fileButtons = ["inspections", "inventory", "violations"]
 fileRoutes = {fileButtons[0]:"", fileButtons[1]:"", fileButtons[2]:""}
 
 
-# In[334]:
+# In[4]:
 
 
 class Parser(object):
@@ -39,18 +45,15 @@ class Parser(object):
         self.csvFile = csvFile
         self.dataList = []
         self.dataObj = {}
+        self.violationsSet = {}
+        # lists and a set (no duplicates in set)
+        self.dataDict = {'inspections':[], 'inventory':[], 'violations':[], 'violation codes':set()}
         
     def parseData(self):
-        print(self.csvFile['inspections'])
-#         with open(self.csvFile['inspections'], newline="", encoding='utf-8-sig') as inFile: 
-#             dataReader = csv.DictReader(inFile)
         self.readInspections()
-#         with open(self.csvFile['inventory'], newline="", encoding='utf-8-sig') as inFile: 
-#             dataReader = csv.DictReader(inFile)
         self.readInventory()
-#         with open(self.csvFile['violations'], newline="", encoding='utf-8-sig') as inFile: 
-#             dataReader = csv.DictReader(inFile)
         self.readViolations()
+        return self.dataDict
                 
     def readInspections(self):
         with open(self.csvFile['inspections'], newline="", encoding='utf-8-sig') as inFile: 
@@ -76,11 +79,10 @@ class Parser(object):
                     row["FACILITY ZIP"] = zipStart[0]
                 except:
                     print('no zip')
-                self.dataList.append(row)
-            print(f'Inspection first doc: \n{self.dataList[0]}')
-            ins = self.collection.insert_many(self.dataList)
+                self.dataDict['inspections'].append(row)
+#             print(f'Inspection first doc: \n{self.dataDict['inspections'][0]}')
+            ins = self.collection.insert_many(self.dataDict['inspections'])
             print('=> Inspections inserted into DB')
-            self.dataList = []
 
     def readInventory(self):
          with open(self.csvFile['inventory'], newline="", encoding='utf-8-sig') as inFile: 
@@ -94,35 +96,35 @@ class Parser(object):
                 mid,end = mid.split(')')
                 row["PE DESCRIPTION"] = start+end
                 row["SEATING DETAILS"] = mid
-                self.dataList.append(row)
-            print(f'Inventory first doc: \n{self.dataList[0]}')
-            ins = self.collection.insert_many(self.dataList)
+                self.dataDict['inventory'].append(row)
+#             print(f'Inventory first doc: \n{self.dataDict['inventory'][0]}')
+            ins = self.collection.insert_many(self.dataDict['inventory'])
             print('=> Inventory inserted into DB')
-            self.dataList = []
             
     def readViolations(self):
         with open(self.csvFile['violations'], newline="", encoding='utf-8-sig') as inFile: 
             dataReader = csv.DictReader(inFile)
             # Group the rows by serial number so they can be added to the corresponding inspection
             for row in dataReader:
-                print(row)
+                # Add violations codes to a set - no duplicates
+                self.dataDict['violation codes'].add(row['VIOLATION CODE'])
                 if row['SERIAL NUMBER'] in self.dataObj:
                     self.dataObj[row['SERIAL NUMBER']].append(row)
                 else:
                     self.dataObj[row['SERIAL NUMBER']] = [row]
-            self.dataList.append(self.dataObj)
-            print(f'Violations first doc: \n{self.dataList[0]}')
-            ins = collection_vendors.insert_many(self.dataList)
+            self.dataDict['violations'].append(self.dataObj)
+#             print(f'Violations first doc: \n{self.dataDict['violations'][0]}')
+            ins = collection_vendors.insert_many(self.dataDict['violations'])
             print('=> Violations inserted into DB')
-            self.dataList = []
         
         
     def formatViolations(self):
         for violation in self.dataObj:
             collection_vendors.update_one({'_id': 'INS-'+violation}, {'$set': {'VIOLATIONS': self.dataObj[violation]}})
+            
 
 
-# In[335]:
+# In[5]:
 
 
 class ButtonUpload(object):
@@ -151,7 +153,7 @@ class ButtonUpload(object):
         ttk.Label(self.mainframe, textvariable=self.uploadLabel).grid(row=self.counter+1, column=2, sticky="w")  
 
 
-# In[336]:
+# In[6]:
 
 
 class AveragesCalculator(object):
@@ -207,7 +209,7 @@ class AveragesCalculator(object):
  
 
 
-# In[337]:
+# In[7]:
 
 
 class UserInterface(object):
@@ -221,6 +223,8 @@ class UserInterface(object):
         self.window.rowconfigure(0, weight=1)
         self.calcCategory = StringVar()
         self.calcYear = StringVar()
+        self.violationsDict = None
+        self.dataDict = None
         
     def createWindow(self):
         self.createInitialFrame()
@@ -250,8 +254,8 @@ class UserInterface(object):
     def handleSave(self):
         self.loadingFrame('Your data is being parsed and loaded into MongoDB...')
         parser = Parser(collection_vendors, fileRoutes)
-        parser.parseData()
-#         parser.formatViolations()
+        self.dataDict = parser.parseData()
+        parser.formatViolations()
         self.createNotebook()
     
     def loadingFrame(self, text):
@@ -286,9 +290,85 @@ class UserInterface(object):
         calcButton = Button(f1, text="Calculate", command=self.calcAverages).grid(row=8, column=0, sticky="sw")
         self.mainframe.grid(column=0, row=0, sticky=(N, W, E, S))
         
-        
         # ====== Widget for tab 2
         heading_two = ttk.Label(f2, text="Violations per Establishment", anchor="w").grid(row=0, sticky="nw")
+        self.createViolationsPlot(f2)
+        
+        # ====== Widget for tab 3
+        heading_two = ttk.Label(f3, text="Correlation between the number of violations commited per vendor and their zip code", anchor="w").grid(row=0, sticky="nw")
+        self.createCorrelationsPlot(f3)
+        
+    def createViolationsPlot(self, f2):
+        # Create dict with violation codes as keys and no. of facilities that commited that violation as values
+        vioDict = {}
+        # Sort the violation codes for easier reading for user
+        sortedCodes = sorted(self.dataDict['violation codes'])
+        for v in sortedCodes:
+            resultsInspections = collection_vendors.find({'VIOLATIONS.VIOLATION CODE':v}, {'FACILITY NAME':1})
+            x = ''
+            for r in resultsInspections:
+                # include one instance of violation per facility    
+                if x == r['FACILITY NAME']:
+                    continue
+                x = r['FACILITY NAME']  
+                if v in vioDict:
+                    vioDict[v] = vioDict[v] + 1
+                else:
+                    vioDict[v] = 1
+        
+        # Display violations vs no. of establishments
+        import matplotlib.pyplot as plt
+        vioKeys = list(vioDict.keys())
+        vioVals = list(vioDict.values())
+        # Create 4 subplots using slices of the keys & values lists
+        fig,a =  plt.subplots(2,2)
+        a[0][0].bar(vioKeys[:round(len(vioKeys)*0.25)], vioVals[:round(len(vioKeys)*0.25)])
+        a[0][1].bar(vioKeys[round(len(vioKeys)*0.25):round(len(vioKeys)*0.5)], vioVals[round(len(vioKeys)*0.25):round(len(vioKeys)*0.5)])
+        a[1][0].bar(vioKeys[round(len(vioKeys)*0.5):round(len(vioKeys)*0.75)], vioVals[round(len(vioKeys)*0.5):round(len(vioKeys)*0.75)])
+        a[1][1].bar(vioKeys[round(len(vioKeys)*0.75):], vioVals[round(len(vioKeys)*0.75):])
+        # Show in console as well as window
+        plt.show()
+
+        # creating the Tkinter canvas containing the Matplotlib figure 
+        canvas = FigureCanvasTkAgg(fig, master = f2)   
+        canvas.draw() 
+
+        # grid the canvas on the Tkinter window 
+        canvas.get_tk_widget().grid(row=0) 
+        
+    def createCorrelationsPlot(self, f3):
+        # Find number of violations per vendor, and their zip code
+        insViosDict = {'Facility ID': [], 'Violations quant': [], 'Zip': []}
+        insVios = collection_vendors.find({'_id':{'$regex':'INS-'}}, {'FACILITY ID':1,'VIOLATIONS':1, 'FACILITY ZIP':1})
+        for r in insVios:
+            if 'FACILITY ID' in r:
+                insViosDict['Facility ID'].append(r['FACILITY ID'])
+            else:
+                insViosDict['Facility ID'].append(NA)
+            if 'VIOLATIONS' in r:
+                insViosDict['Violations quant'].append(len(r['VIOLATIONS']))
+            else:
+                insViosDict['Violations quant'].append(NA)
+            if 'FACILITY ZIP' in r:
+                insViosDict['Zip'].append(r['FACILITY ZIP'])
+            else:
+                insViosDict['Zip'].append(NA)
+                
+        #  Create DataFrame - sorted by zip to make visualisations easier to understand
+        insViosDF = pd.DataFrame(insViosDict)
+        insViosDF.sort_values(by=['Zip'],inplace=True)
+
+        # Creating the figure and Seaborn plot
+        figure = Figure(figsize=(6, 6))
+        ax = figure.subplots()
+        sns.scatterplot(x="Zip", y="Violations quant", data=insViosDF, ax=ax)
+        
+        # creating the Tkinter canvas containing the Matplotlib figure 
+        canvas = FigureCanvasTkAgg(figure, master = f3)   
+        canvas.draw() 
+
+        # placing the canvas on the Tkinter window 
+        canvas.get_tk_widget().grid(row=0) 
     
     def calcAverages(self):
         calcCatVal = self.calcCategory.get()
@@ -325,15 +405,13 @@ class UserInterface(object):
         tree.heading("two", text="Median")
         tree.heading("three", text="Mode")
 
-#         data = resultsAv.to_numpy()
-
         for index, row in resultsAv.iterrows(): 
             tree.insert('','end', text=index, values=[row['mean'],row['median'],row['mode']])
         print(f'This is resultsAv: \n{resultsAv}')
  
 
 
-# In[338]:
+# In[8]:
 
 
 ui = UserInterface('summative')
@@ -392,7 +470,7 @@ for d in data:
 avResultsWindow.mainloop()
 
 
-# In[192]:
+# In[12]:
 
 
 calcAv = AveragesCalculator('2018', 'SEATING DETAILS')
@@ -433,42 +511,167 @@ for index, row in df.iterrows():
     break
 
 
-# In[265]:
+# In[16]:
 
+
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 avResultsWindow = Tk()
 avResultsWindow.title('Averages Results')
-avResultsWindow.geometry("600x400")
+avResultsWindow.geometry("1200x800")
 avResultsWindow.columnconfigure(0, weight=1)
 avResultsWindow.rowconfigure(0, weight=1)
 mainframe = ttk.Frame(avResultsWindow, padding="16 16 16 16")
 mainframe.place(relheight=1, relwidth=1)
 
-tree = ttk.Treeview(mainframe)
-tree.place(relheight=1, relwidth=1)
-treescrolly = Scrollbar(mainframe, orient='vertical', command=tree.yview)
-treescrollx = Scrollbar(mainframe, orient='horizontal', command=tree.xview)
-tree.configure(xscrollcommand=treescrollx.set, yscrollcommand=treescrolly.set)
-treescrolly.pack(side='right', fill='y')
-treescrollx.pack(side='bottom', fill='x')
 
-tree["columns"]=("one","two","three")
-tree.column("#0", width=75, minwidth=75)
-tree.column("one", width=75, minwidth=75)
-tree.column("two", width=75, minwidth=75)
-tree.column("three", width=75, minwidth=75)
+figure = plt.Figure(figsize=(6,5), dpi=100)
+ax = figure.add_subplot(111)
+chart_type = FigureCanvasTkAgg(figure, avResultsWindow)
+chart_type.get_tk_widget().pack()
+df = df[['mean','median']].groupby('mean').sum()
+df.plot(kind='bar', legend=True, ax=ax)
+ax.set_title('The Title for your chart')
 
-tree.heading("#0",text="Seating")
-tree.heading("one", text="Mean")
-tree.heading("two", text="Median")
-tree.heading("three", text="Mode")
-
-data = df.to_numpy()
-
-for index, row in df.iterrows(): 
-    tree.insert('','end', text=index, values=[row['mean'],row['median'],row['mode']])
-    
 avResultsWindow.mainloop()
+
+
+# In[84]:
+
+
+import matplotlib.pyplot as plt
+fig,a =  plt.subplots(2,2)
+import numpy as np
+x = np.arange(1,5)
+a[0][0].plot(x,x*x)
+a[0][1].plot(x,np.sqrt(x))
+a[1][0].plot(x,np.exp(x))
+a[1][1].plot(x,np.log10(x))
+plt.show()
+
+
+# In[85]:
+
+
+x
+
+
+# In[147]:
+
+
+vioKeys = [1, 2, 3, 4, 5, 6, 7]
+arLen = round(len(vioKeys)*0.25)
+arLen
+
+
+# In[13]:
+
+
+from matplotlib.figure import Figure 
+from matplotlib.backends.backend_tkagg import (FigureCanvasTkAgg,  
+NavigationToolbar2Tk) 
+import matplotlib.pyplot as plt
+
+# the main Tkinter window 
+window = Tk() 
+
+# the figure that will contain the plot 
+# fig = Figure(figsize = (8, 8), 
+#              dpi = 100) 
+
+# list of squares 
+# y = [i**2 for i in range(101)] 
+
+
+
+vioKeys = [1,2,3,4,5,6,7,8,9,10]
+vioVals = [1,2,3,4,5,6,7,8,9,10]
+# Create 4 subplots using slices of the keys & values lists
+fig,a =  plt.subplots(2,2)
+a[0][0].bar(vioKeys[:round(len(vioKeys)*0.25)], vioVals[:round(len(vioKeys)*0.25)])
+a[0][1].bar(vioKeys[round(len(vioKeys)*0.25):round(len(vioKeys)*0.5)], vioVals[round(len(vioKeys)*0.25):round(len(vioKeys)*0.5)])
+a[1][0].bar(vioKeys[round(len(vioKeys)*0.5):round(len(vioKeys)*0.75)], vioVals[round(len(vioKeys)*0.5):round(len(vioKeys)*0.75)])
+a[1][1].bar(vioKeys[round(len(vioKeys)*0.75):], vioVals[round(len(vioKeys)*0.75):])
+# plt.show()
+
+
+# adding the subplot 
+# plot1 = fig.add_subplot(221)
+# plot2 = fig.add_subplot(222)
+# plot3 = fig.add_subplot(223)
+# plot4 = fig.add_subplot(224)
+
+# plotting the graph 
+# plot1.bar(vioKeys[:round(len(vioKeys)*0.25)], vioVals[:round(len(vioKeys)*0.25)])
+# plot2.bar(vioKeys[:round(len(vioKeys)*0.25)], vioVals[:round(len(vioKeys)*0.25)])
+# plot3.bar(vioKeys[:round(len(vioKeys)*0.25)], vioVals[:round(len(vioKeys)*0.25)])
+# plot4.bar(vioKeys[:round(len(vioKeys)*0.25)], vioVals[:round(len(vioKeys)*0.25)])
+
+# creating the Tkinter canvas 
+# containing the Matplotlib figure 
+canvas = FigureCanvasTkAgg(fig, 
+                           master = window)   
+canvas.draw() 
+
+# placing the canvas on the Tkinter window 
+canvas.get_tk_widget().pack() 
+
+# creating the Matplotlib toolbar 
+toolbar = NavigationToolbar2Tk(canvas, 
+                               window) 
+toolbar.update() 
+
+# placing the toolbar on the Tkinter window 
+canvas.get_tk_widget().pack() 
+  
+# setting the title  
+window.title('Plotting in Tkinter') 
+  
+# dimensions of the main window 
+window.geometry("500x500") 
+  
+# button that displays the plot 
+plot_button = Button(master = window,  
+                     command = plot1, 
+                     height = 2,  
+                     width = 10, 
+                     text = "Plot") 
+  
+# place the button  
+# in main window 
+plot_button.pack() 
+  
+# run the gui 
+window.mainloop() 
+
+
+# In[1]:
+
+
+y = [i**2 for i in range(101)] 
+y
+
+
+# In[5]:
+
+
+import matplotlib.pyplot as plt
+vioKeys = [1,2,3,4,5,6,7,8,9,10]
+vioVals = [1,2,3,4,5,6,7,8,9,10]
+# Create 4 subplots using slices of the keys & values lists
+fig,a =  plt.subplots(2,2)
+a[0][0].bar(vioKeys[:round(len(vioKeys)*0.25)], vioVals[:round(len(vioKeys)*0.25)])
+a[0][1].bar(vioKeys[round(len(vioKeys)*0.25):round(len(vioKeys)*0.5)], vioVals[round(len(vioKeys)*0.25):round(len(vioKeys)*0.5)])
+a[1][0].bar(vioKeys[round(len(vioKeys)*0.5):round(len(vioKeys)*0.75)], vioVals[round(len(vioKeys)*0.5):round(len(vioKeys)*0.75)])
+a[1][1].bar(vioKeys[round(len(vioKeys)*0.75):], vioVals[round(len(vioKeys)*0.75):])
+plt.show()
+
+
+# In[ ]:
+
+
+
 
 
 # In[ ]:
