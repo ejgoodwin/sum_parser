@@ -1,5 +1,5 @@
 # Python parser
-The program takes 3 specific datasets in csv format. It reads and cleans the data and uploads it to MongoDB.
+The program takes 3 specific datasets in csv format. It reads and cleans the data and uploads them to MongoDB.
 The program uses agregation to create visualisations based on features across multiple datasets. Tkinter is used to build a Python UI.
 
 ## Tech stack
